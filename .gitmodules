@@ -1,0 +1,11 @@
+[submodule "extern/metagraph"]
+	path = extern/metagraph
+	url = https://github.com/ratschlab/metagraph.git
+	branch = api-header-example
+[submodule "extern/pybind11"]
+	path = extern/pybind11
+	url = ../../pybind/pybind11
+	branch = stable
+[submodule "extern/parlaylib"]
+	path = extern/parlaylib
+	url = https://github.com/cmuparlay/parlaylib.git
