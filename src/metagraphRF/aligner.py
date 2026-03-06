@@ -1,20 +1,14 @@
-import pandas as pd
 from metagraph.client import GraphClient
-import os
 import sys
-from pathlib import Path
 from typing import Optional, Any, Iterable, List, Dict
 from dataclasses import dataclass, fields
 import attrs
 import argparse
 
-from pandas.core.sample import sample
-
-
 @dataclass
 class Params:
     port: int = 5555
-    discovery_threshold: float = 0.2
+    min_exact_match: float = 0.5
 
 
 def get_params_from_kwargs(kwargs):
@@ -29,7 +23,7 @@ def get_params_from_args():
     Get parameters from sys.argv
     :return: A Params dataclass instance
     """
-    parser = argparse.ArgumentParser(description="Minknow server simulator")
+    parser = argparse.ArgumentParser(description="Readfish-compatible Metagraph API")
 
     # Automatically add arguments based on the Config dataclass fields
     for field in fields(Params):
@@ -80,18 +74,6 @@ class Alignment:
     r_en: int
     strand: int
 
-
-def mgresults2alignmentdict(results: pd.DataFrame) -> Dict[int, Alignment]:
-    alignments = {}
-    for idx, row in results.iterrows():
-        start = row['kmer_coords'][0].split('-')[1]
-        end = row['kmer_coords'][-1].split('-')[1]
-        ctg = row['sample'][:-1]
-        strand = 1 if row['sample'][-1] == '+' else -1
-        alignments[int(row['seq_description'])] = Alignment(ctg=ctg, r_st=start, r_en=end, strand=strand)
-    return alignments
-
-
 @attrs.define
 class Result:
     """Result holder
@@ -102,7 +84,6 @@ class Result:
     :param channel: The channel that this read is being sequenced on
     :param read_id: The read ID assigned to this read by MinKNOW
     :param seq: The basecalled sequence for this read
-    :param decision: The ``Decision`` that has been made, this will by used to determine the ``Action``
     :param barcode: The barcode that has been assigned to this read
     :param basecall_data: Any extra data that the basecaller may want to send to the aligner
     :param alignment_data: Any extra alignment data
@@ -132,7 +113,15 @@ class Aligner:
         self.client = GraphClient('localhost', port=self.params.port, api_path='')
 
     def validate(self) -> None:
-        pass
+        try:
+            if self.client.ready():
+                print("Metagraph client is ready")
+                return
+        except ConnectionRefusedError:
+            print("Metagraph server is not running.")
+            print("Please run `metagraph server_query -i <graph.dbg> -a <grapg.column.annodbg>`")
+        finally:
+            pass
 
     @property
     def initialised(self) -> bool:
@@ -152,12 +141,14 @@ class Aligner:
             else:
                 skipped.append(result)
 
-        results = self.client.search(sequences, discovery_threshold=self.params.discovery_threshold, top_labels=1, query_coords=True)
-        alignments = mgresults2alignmentdict(results)
+        results = self.client.align(sequences,min_exact_match=self.params.min_exact_match)
+        aligned_sequences = set(results['seq_descritpion'])
+
         for i in range(len(metadata)):
             result = metadata[i]
-            if i in alignments:
-                result.alignment_data = [alignments[i]]
+            if i in aligned_sequences:
+                # we send a dummy alignment
+                result.alignment_data = [Alignment('Found', 0, len(result.seq), 1)]
             else:
                 result.alignment_data = []
             yield result
@@ -171,3 +162,24 @@ class Aligner:
         if self.logfile and self.logfile not in [sys.stdout, sys.stderr]:
             self.logfile.close()
 
+
+def test_aligner():
+    sequences = [x.strip() for x in """
+            TCAGCGCTTCAGGTGCAATGGCTACCGGCTGGGTTCGCGATGGATCCACCTGGTACTACCTCACGCCCTCGGT.
+            CTAATAACTGAAATAGAGGCTGTTATAAATGCAGATAAATTATGCTGAATGAAGAACGATATGAATATAAAGG.
+            AAATGAGCCAATTGTCCAAGCAAGCAAATTGAAAATATTACAAAGGCCCAAGAGGCACTTGCTAAAGAAGTAG.
+            GCCACGCCGTCCAATGAAGTTTTCACGATACAAACGGCGTTCACAAAATCGAGCTGATCGTCATAGCCGACCG.
+            ACAATTTGTTGAAATGATGGTGCAGGATTGAAAGAAAGCCATCCTCATGATGTGCAATCACAAACGAGGCTCT.
+            AAACGCCCAACTGCAAGCCCAAAGCGCATACGAGACGGATAATGATCGTCTCGTAACCGACGGCTCGAGGAAA.
+            ACCCGATTTCTTCTCACTCTGTAGCCATAATAGCCAAAAAACTGATGAATCTTTCGATTCATCAGTTTTAAAG.
+            ACCATAAGGTACCTCCCTATTAAATATCAGTCATCATCTTCTTCAGCATGATGGCTGAAACTTCAAGGCTGTA
+        """.split('.\n')]
+
+    aligner = Aligner()
+    aligner.validate()
+    df = aligner.client.align(sequences)
+    print(df)
+
+
+if __name__ == "__main__":
+    test_aligner()
