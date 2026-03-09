@@ -117,9 +117,11 @@ class Aligner:
             if self.client.ready():
                 print("Metagraph client is ready")
                 return
-        except ConnectionRefusedError:
+        except Exception as e:
+            print(e)
             print("Metagraph server is not running.")
             print("Please run `metagraph server_query -i <graph.dbg> -a <grapg.column.annodbg>`")
+            exit(1)
         finally:
             pass
 
@@ -142,11 +144,11 @@ class Aligner:
                 skipped.append(result)
 
         results = self.client.align(sequences,min_exact_match=self.params.min_exact_match)
-        aligned_sequences = set(results['seq_descritpion'])
+        aligned_sequences = set(results['seq_description'])
 
         for i in range(len(metadata)):
             result = metadata[i]
-            if i in aligned_sequences:
+            if str(i) in aligned_sequences:
                 # we send a dummy alignment
                 result.alignment_data = [Alignment('Found', 0, len(result.seq), 1)]
             else:
@@ -177,8 +179,13 @@ def test_aligner():
 
     aligner = Aligner()
     aligner.validate()
-    df = aligner.client.align(sequences)
+    df = aligner.client.align(sequences, min_exact_match=aligner.params.min_exact_match)
     print(df)
+
+    queries = [Result(i, 'Read' + str(i), sequences[i]) for i in range(len(sequences))]
+    results = aligner.map_reads(queries)
+    for result in results:
+        print(result)
 
 
 if __name__ == "__main__":
