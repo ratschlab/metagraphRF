@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metagraphRF"
-version = "0.1.0.dev2"
+version = "0.1.0.dev3"
 description = "Readfish-compatible Metagraph wrapper"
 authors = [
     { name="Sayan Goswami", email="sgoswami@grlab.org" }

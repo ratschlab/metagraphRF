@@ -130,6 +130,7 @@ class Aligner:
         return True
 
     def describe(self, regions: list, barcodes: dict) -> str:
+        self.validate()
         return "Running metagraph client. Hopefully, I will return a more meaningful description in the future"
 
     def map_reads(self, calls: Iterable[Result]) -> Iterable[Result]:
