@@ -1,3 +1,7 @@
 .idea
+.vscode
+build
+**egg**
+**__pycache__**
 cmake-build-debug
 cmake-build-release

@@ -120,7 +120,7 @@ class Aligner:
         except Exception as e:
             print(e)
             print("Metagraph server is not running.")
-            print("Please run `metagraph server_query -i <graph.dbg> -a <grapg.column.annodbg>`")
+            print("Please run `metagraph server_query -i <graph.dbg> -a <graph.column.annodbg>`")
             exit(1)
         finally:
             pass
@@ -131,7 +131,7 @@ class Aligner:
 
     def describe(self, regions: list, barcodes: dict) -> str:
         self.validate()
-        return "Running metagraph client. Hopefully, I will return a more meaningful description in the future"
+        return "Hopefully, I will return a more meaningful description in the future"
 
     def map_reads(self, calls: Iterable[Result]) -> Iterable[Result]:
         skipped = []
