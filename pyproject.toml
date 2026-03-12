@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metagraphRF"
-version = "0.1.0.dev1"
+version = "0.1.0.dev2"
 description = "Readfish-compatible Metagraph wrapper"
 authors = [
     { name="Sayan Goswami", email="sgoswami@grlab.org" }
 ]
 dependencies = [
-    "git+https://github.com/ratschlab/metagraph.git@main#subdirectory=metagraph/api/python"
+    "metagraph-api @ git+https://github.com/ratschlab/metagraph.git#subdirectory=metagraph/api/python"
 ]
 
 [tool.setuptools.packages.find]
