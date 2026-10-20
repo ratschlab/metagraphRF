@@ -109,6 +109,12 @@ class Aligner:
                 self.logfile = open(debug_log, 'w')
         else:
             self.logfile = open(os.devnull, 'w')
+        self.backend = kwargs.pop('backend', 'server')
+        if self.backend == 'local':
+            self._init_local(**kwargs)
+            return
+        if self.backend != 'server':
+            raise ValueError(f"Unknown backend '{self.backend}', expected 'server' or 'local'")
         self.kwargs = kwargs
         self.port = self.kwargs.get('port', 5555)
         self.client_name = self.kwargs.get('name', 'Metagraph_RF_Aligner')
@@ -117,7 +123,20 @@ class Aligner:
         # self.params = get_params_from_kwargs(kwargs)
         self.client = GraphClient('localhost', api_path='', port=self.port, name=self.client_name)
 
+    def _init_local(self, graph: str, annotation: str, threads: int = 1,
+                    num_top_labels: int = 1, discovery_fraction: float = 0.0,
+                    presence_fraction: float = 0.0):
+        """In-process backend: label queries via pymetagraph, no server needed."""
+        import pymetagraph
+        self.graph_path = graph
+        self.graph = pymetagraph.AnnotatedGraph(graph, annotation, threads=int(threads))
+        self.query_params = dict(num_top_labels=int(num_top_labels),
+                                 discovery_fraction=float(discovery_fraction),
+                                 presence_fraction=float(presence_fraction))
+
     def validate(self) -> None:
+        if self.backend == 'local':
+            return
         try:
             if self.client.ready():
                 print("Metagraph client is ready")
@@ -135,6 +154,9 @@ class Aligner:
         return True
 
     def describe(self, regions: list, barcodes: dict) -> str:
+        if self.backend == 'local':
+            return (f"metagraphRF local backend: {self.graph_path} (k={self.graph.k}, "
+                    f"{len(self.graph.labels)} labels), query {self.query_params}")
         self.validate()
         return "Hopefully, I will return a more meaningful description in the future"
 
@@ -148,6 +170,10 @@ class Aligner:
                 sequences.append(result.seq)
             else:
                 skipped.append(result)
+
+        if self.backend == 'local':
+            yield from self._map_local(metadata, sequences, skipped)
+            return
 
         results = self.client.align(sequences,**self.kwargs)
         aligned_sequences = set(results['seq_description'])
@@ -168,6 +194,21 @@ class Aligner:
             print(f"SKIP\t{result.read_id}\tN", file=self.logfile)
             yield result
 
+
+    def _map_local(self, metadata: list, sequences: list, skipped: list) -> Iterable[Result]:
+        """One alignment per reported label, so readfish's targets and multi_* apply."""
+        for result, hits in zip(metadata, self.graph.query(sequences, **self.query_params)):
+            result.alignment_data = [Alignment(label, 0, len(result.seq), 1) for label, _ in hits]
+            if hits:
+                print(f"MAP\t{result.read_id}\t{result.seq}", file=self.logfile)
+            else:
+                print(f"NOMAP\t{result.read_id}\t{result.seq}", file=self.logfile)
+            yield result
+
+        for result in skipped:
+            result.alignment_data = []
+            print(f"SKIP\t{result.read_id}\tN", file=self.logfile)
+            yield result
 
     def disconnect(self):
         if self.logfile and self.logfile not in [sys.stdout, sys.stderr]:

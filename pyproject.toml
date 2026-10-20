@@ -4,13 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "metagraphRF"
-version = "0.1.0.dev7"
+version = "0.1.0.dev8"
 description = "Readfish-compatible Metagraph wrapper"
 authors = [
     { name="Sayan Goswami", email="sgoswami@grlab.org" }
 ]
 dependencies = [
     "metagraph-api @ git+https://github.com/ratschlab/metagraph.git@align_refactor#subdirectory=metagraph/api/python"
+]
+
+[project.optional-dependencies]
+# backend = "local": in-process label queries (builds metagraph from source)
+local = [
+    "pymetagraph @ git+https://github.com/ratschlab/metagraph.git@ak/pymetagraph-query#subdirectory=metagraph/api/python/pymetagraph"
 ]
 
 [tool.setuptools.packages.find]
