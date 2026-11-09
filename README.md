@@ -32,8 +32,8 @@ reported is `no_map`.
 | mode | MetaGraph operation | settings (defaults) |
 |---|---|---|
 | `query` | label query (`metagraph query`): labels sharing at least `discovery_fraction` of the read's k-mers | `num_top_labels` (1), `discovery_fraction` (0.0), `presence_fraction` (0.0) |
-| `map` | seed-only label mapping (`metagraph align -a --align-map-only`): labels whose seeds cover the most of the read | `min_exact_match` (0.7), `min_seed_length` (min(k, 19)), `max_seed_length` |
-| `align` | alignment (`metagraph align`) | `labeled` (true), `min_exact_match` (0.7), `max_alternative_alignments` (1), `min_seed_length` (min(k, 19)), `max_seed_length`, `max_nodes_per_seq_char` (5.0) |
+| `map` | seed-only label mapping (`metagraph align -a --align-map-only`): labels whose seeds cover the most of the read | `min_exact_match` (0.7) |
+| `align` | alignment (`metagraph align`) | `labeled` (true), `min_exact_match` (0.7), `max_alternative_alignments` (1), `max_num_nodes_per_seq_char` (5.0) |
 
 With `labeled = false`, `align` behaves like the `/align` endpoint of `metagraph server_query`
 that earlier versions of this plugin used: alignments have no labels and are reported with the

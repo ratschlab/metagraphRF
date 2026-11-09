@@ -14,7 +14,7 @@ requires-python = ">=3.10"
 dependencies = [
     "attrs",
     # builds metagraph from source; install pymetagraph first to use a local build
-    "pymetagraph @ git+https://github.com/ratschlab/metagraph.git@ak/pymetagraph-align#subdirectory=metagraph/api/python/pymetagraph",
+    "pymetagraph @ git+https://github.com/ratschlab/metagraph.git@master#subdirectory=metagraph/api/python/pymetagraph",
 ]
 
 [tool.setuptools.packages.find]

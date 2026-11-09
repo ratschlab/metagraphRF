@@ -25,9 +25,9 @@ import attrs
 # settings each mode accepts, besides graph, annotation, threads, mode, debug_log
 MODE_SETTINGS = {
     "query": {"num_top_labels": int, "discovery_fraction": float, "presence_fraction": float},
-    "map": {"min_exact_match": float, "min_seed_length": int, "max_seed_length": int},
+    "map": {"min_exact_match": float},
     "align": {"labeled": bool, "min_exact_match": float, "max_alternative_alignments": int,
-              "min_seed_length": int, "max_seed_length": int, "max_nodes_per_seq_char": float},
+              "max_num_nodes_per_seq_char": float},
 }
 # defaults where they differ from pymetagraph's (which follow the metagraph CLI)
 MODE_DEFAULTS = {
