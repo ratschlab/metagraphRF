@@ -1,71 +1,39 @@
-from metagraph.client import GraphClient
+"""readfish aligner plugin backed by an in-process MetaGraph index (pymetagraph).
+
+A read counts as mapped if MetaGraph reports anything for it in the selected
+mode, and every reported label becomes one alignment with that label as the
+contig, so readfish's targets and multi_*/single_* conditions apply to labels:
+
+- ``query``: label query (``metagraph query``), the labels sharing at least
+  ``discovery_fraction`` of the read's k-mers.
+- ``map``: seed-only label mapping (``metagraph align --align-map-only``),
+  the labels whose seeds cover the most of the read.
+- ``align``: sequence-to-graph alignment (``metagraph align``). With
+  ``labeled = false`` alignments carry no label and are reported with the
+  contig ``*``, as the March 2026 runs did through ``metagraph server_query``.
+
+Reference coordinates are not known (label annotations have none), so every
+alignment spans the read's aligned or mapped query range on the target.
+"""
 import os
 import sys
-from typing import Optional, Any, Iterable, List, Dict
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
+from typing import Any, Iterable, Optional
+
 import attrs
-import argparse
 
-# @dataclass
-# class Params:
-#     port: int = 5555
-#     min_exact_match: float = 0.5
-
-
-# def get_params_from_kwargs(kwargs):
-#     # Filter kwargs to only include fields that are in the Param dataclass
-#     param_fields = {f.name for f in fields(Params)}
-#     filtered_kwargs = {k: v for k, v in kwargs.items() if k in param_fields}
-#     return Params(**filtered_kwargs)
-
-
-# def get_params_from_args():
-#     """
-#     Get parameters from sys.argv
-#     :return: A Params dataclass instance
-#     """
-#     parser = argparse.ArgumentParser(description="Readfish-compatible Metagraph API")
-
-#     # Automatically add arguments based on the Config dataclass fields
-#     for field in fields(Params):
-#         field_type = field.type
-
-#         # For fields that are required, explicitly set 'required=True'
-#         if field.default is field.default_factory:  # Check if default is absent
-#             is_required = True
-#         else:
-#             is_required = False
-
-#         if field_type == List[str]:
-#             # For List fields, handle them as an optional list of values
-#             parser.add_argument(
-#                 f'--{field.name}',
-#                 type=str,
-#                 nargs='+',  # Accepts multiple values
-#                 required=is_required,  # Only set required if field has no default
-#                 help=f"List of {field.name} values"
-#             )
-#         elif field_type == bool:
-#             # Boolean flags, no value expected
-#             parser.add_argument(
-#                 f'--{field.name}',
-#                 action='store_true',  # Presence means True
-#                 required=is_required,  # Only set required if field has no default
-#                 help=f"Set {field.name} to True"
-#             )
-#         else:
-#             # For other types, handle with default or required flag
-#             parser.add_argument(
-#                 f'--{field.name}',
-#                 type=field_type,
-#                 default=getattr(Params, field.name, None),  # Use None if no default
-#                 required=is_required,  # Only set required if field has no default
-#                 help=f"Set the {field.name} (default: {getattr(Params, field.name, None)})"
-#             )
-
-#     parsed_args = parser.parse_args()
-#     params = Params(**vars(parsed_args))
-#     return params
+# settings each mode accepts, besides graph, annotation, threads, mode, debug_log
+MODE_SETTINGS = {
+    "query": {"num_top_labels": int, "discovery_fraction": float, "presence_fraction": float},
+    "map": {"min_exact_match": float, "min_seed_length": int},
+    "align": {"labeled": bool, "min_exact_match": float, "max_alternative_alignments": int,
+              "max_num_nodes_per_seq_char": float, "min_seed_length": int},
+}
+# defaults where they differ from pymetagraph's (which follow the metagraph CLI)
+MODE_DEFAULTS = {
+    "query": {"num_top_labels": 1, "discovery_fraction": 0.0},
+}
+UNLABELED = "*"
 
 
 @dataclass
@@ -74,6 +42,7 @@ class Alignment:
     r_st: int
     r_en: int
     strand: int
+
 
 @attrs.define
 class Result:
@@ -97,46 +66,80 @@ class Result:
     basecall_data: Optional[Any] = attrs.field(default=None)
     alignment_data: Optional[list[Alignment]] = attrs.field(default=None)
 
-class Aligner:
 
-    def __init__(self, debug_log: str | None = None, **kwargs):
-        if debug_log:
-            if debug_log == 'stdout':
-                self.logfile = sys.stdout
-            elif debug_log == 'stderr':
-                self.logfile = sys.stderr
-            else:
-                self.logfile = open(debug_log, 'w')
+def _to_bool(value) -> bool:
+    if isinstance(value, str):
+        if value.lower() in ("true", "1", "yes"):
+            return True
+        if value.lower() in ("false", "0", "no"):
+            return False
+        raise ValueError(f"not a boolean: {value!r}")
+    return bool(value)
+
+
+class Aligner:
+    """
+    :param graph: Path to the graph (``.dbg``).
+    :param annotation: Path to the annotation (e.g. ``.column.annodbg``).
+    :param threads: Threads used by pymetagraph.
+    :param mode: ``query``, ``map`` or ``align``; the remaining settings
+        depend on it (see ``MODE_SETTINGS``) and are passed to pymetagraph.
+    :param debug_log: File (or ``stdout``/``stderr``) to log MAP/NOMAP/SKIP per read to.
+    """
+
+    def __init__(self, graph: str, annotation: str, threads: int = 1, mode: str = "query",
+                 debug_log: Optional[str] = None, **kwargs):
+        if mode not in MODE_SETTINGS:
+            raise ValueError(f"Unknown mode '{mode}', expected one of {', '.join(MODE_SETTINGS)}")
+        unknown = set(kwargs) - set(MODE_SETTINGS[mode])
+        if unknown:
+            raise ValueError(f"Settings not supported in mode '{mode}': {', '.join(sorted(unknown))}"
+                             f" (supported: {', '.join(MODE_SETTINGS[mode])})")
+        self.mode = mode
+        self.params = dict(MODE_DEFAULTS.get(mode, {}))
+        for key, value in kwargs.items():
+            convert = _to_bool if MODE_SETTINGS[mode][key] is bool else MODE_SETTINGS[mode][key]
+            self.params[key] = convert(value)
+
+        if debug_log == "stdout":
+            self.logfile = sys.stdout
+        elif debug_log == "stderr":
+            self.logfile = sys.stderr
+        elif debug_log:
+            self.logfile = open(debug_log, "w")
         else:
-            self.logfile = open(os.devnull, 'w')
-        self.kwargs = kwargs
-        self.port = self.kwargs.get('port', 5555)
-        self.client_name = self.kwargs.get('name', 'Metagraph_RF_Aligner')
-        self.kwargs.pop('port', None)  # Remove port from kwargs to avoid passing it to GraphClient
-        self.kwargs.pop('name', None)  # Remove name from kwargs to avoid passing it to GraphClient
-        # self.params = get_params_from_kwargs(kwargs)
-        self.client = GraphClient('localhost', api_path='', port=self.port, name=self.client_name)
+            self.logfile = open(os.devnull, "w")
+
+        import pymetagraph
+        self.graph_path = graph
+        self.graph = pymetagraph.AnnotatedGraph(graph, annotation, threads=int(threads))
 
     def validate(self) -> None:
-        try:
-            if self.client.ready():
-                print("Metagraph client is ready")
-                return
-        except Exception as e:
-            print(e)
-            print("Metagraph server is not running.")
-            print("Please run `metagraph server_query -i <graph.dbg> -a <graph.column.annodbg>`")
-            exit(1)
-        finally:
-            pass
+        pass
 
     @property
     def initialised(self) -> bool:
         return True
 
     def describe(self, regions: list, barcodes: dict) -> str:
-        self.validate()
-        return "Hopefully, I will return a more meaningful description in the future"
+        return (f"metagraphRF: {self.graph_path} (k={self.graph.k}, {len(self.graph.labels)} labels), "
+                f"mode {self.mode} {self.params}")
+
+    def _alignments(self, sequences: list) -> list:
+        """Per sequence, a list of Alignment, empty if nothing was found."""
+        if self.mode == "query":
+            return [[Alignment(label, 0, len(seq), 1) for label, _ in hits]
+                    for seq, hits in zip(sequences, self.graph.query(sequences, **self.params))]
+        if self.mode == "map":
+            return [[] if m is None else
+                    [Alignment(label, m.query_begin, m.query_end, -1 if m.orientation else 1)
+                     for label in m.labels]
+                    for m in self.graph.map(sequences, **self.params)]
+        alignments = []
+        for paths in self.graph.align(sequences, **self.params):
+            alignments.append([Alignment(label, a.query_begin, a.query_end, -1 if a.orientation else 1)
+                               for a in paths for label in (a.labels or [UNLABELED])])
+        return alignments
 
     def map_reads(self, calls: Iterable[Result]) -> Iterable[Result]:
         skipped = []
@@ -149,18 +152,9 @@ class Aligner:
             else:
                 skipped.append(result)
 
-        results = self.client.align(sequences,**self.kwargs)
-        aligned_sequences = set(results['seq_description'])
-
-        for i in range(len(metadata)):
-            result = metadata[i]
-            if str(i) in aligned_sequences:
-                # we send a dummy alignment
-                result.alignment_data = [Alignment('Found', 0, len(result.seq), 1)]
-                print(f"MAP\t{result.read_id}\t{result.seq}", file=self.logfile)
-            else:
-                result.alignment_data = []
-                print(f"NOMAP\t{result.read_id}\t{result.seq}", file=self.logfile)
+        for result, alignments in zip(metadata, self._alignments(sequences)):
+            result.alignment_data = alignments
+            print(f"{'MAP' if alignments else 'NOMAP'}\t{result.read_id}\t{result.seq}", file=self.logfile)
             yield result
 
         for result in skipped:
@@ -168,34 +162,6 @@ class Aligner:
             print(f"SKIP\t{result.read_id}\tN", file=self.logfile)
             yield result
 
-
     def disconnect(self):
         if self.logfile and self.logfile not in [sys.stdout, sys.stderr]:
             self.logfile.close()
-
-
-def test_aligner():
-    sequences = [x.strip() for x in """
-            TCAGCGCTTCAGGTGCAATGGCTACCGGCTGGGTTCGCGATGGATCCACCTGGTACTACCTCACGCCCTCGGT.
-            CTAATAACTGAAATAGAGGCTGTTATAAATGCAGATAAATTATGCTGAATGAAGAACGATATGAATATAAAGG.
-            AAATGAGCCAATTGTCCAAGCAAGCAAATTGAAAATATTACAAAGGCCCAAGAGGCACTTGCTAAAGAAGTAG.
-            GCCACGCCGTCCAATGAAGTTTTCACGATACAAACGGCGTTCACAAAATCGAGCTGATCGTCATAGCCGACCG.
-            ACAATTTGTTGAAATGATGGTGCAGGATTGAAAGAAAGCCATCCTCATGATGTGCAATCACAAACGAGGCTCT.
-            AAACGCCCAACTGCAAGCCCAAAGCGCATACGAGACGGATAATGATCGTCTCGTAACCGACGGCTCGAGGAAA.
-            ACCCGATTTCTTCTCACTCTGTAGCCATAATAGCCAAAAAACTGATGAATCTTTCGATTCATCAGTTTTAAAG.
-            ACCATAAGGTACCTCCCTATTAAATATCAGTCATCATCTTCTTCAGCATGATGGCTGAAACTTCAAGGCTGTA
-        """.split('.\n')]
-
-    aligner = Aligner()
-    aligner.validate()
-    df = aligner.client.align(sequences, min_exact_match=.3)
-    print(df)
-
-    queries = [Result(i, 'Read' + str(i), sequences[i]) for i in range(len(sequences))]
-    results = aligner.map_reads(queries)
-    for result in results:
-        print(result)
-
-
-if __name__ == "__main__":
-    test_aligner()
